@@ -27,8 +27,16 @@ fecha_desde = '2020-01-01'
 fecha_hasta = '2026-08-01'
 
 # Lista con los nombres de tus archivos con el listado de codigos de obras de ID de obra
-archivos_json = ['obras_rm.json', 'obras_valparaiso.json', 'obras_arica.json', 'obras_atacama.json', 'obras_coquimbo_sub.json', 'obras_coquimbo_sup.json',
-                 'obras_antofagasta.json', 'obras_tarapaca.json']
+archivos_json = [
+    'datos_obras/obras_rm.json', 
+    'datos_obras/obras_valparaiso.json', 
+    'datos_obras/obras_arica.json', 
+    'datos_obras/obras_atacama.json', 
+    'datos_obras/obras_coquimbo_sub.json', 
+    'datos_obras/obras_coquimbo_sup.json',
+    'datos_obras/obras_antofagasta.json', 
+    'datos_obras/obras_tarapaca.json'
+]
 
 # Aquí guardaremos todos los códigos e IDs combinados
 mapa_obras_unificado = {}
