@@ -16,7 +16,7 @@ regiones_chile = [
 ]
 
 carpeta_admin = Path("divisiones_admin")
-path_csv = "obras_registradas_mee_chile.csv"
+path_csv = "01-07-2026 Obras MEE.csv"
 
 # **2. Normalizador de Texto**
 def normalizar_texto(texto):
@@ -63,25 +63,25 @@ df_csv["UTM_Norte"] = pd.to_numeric(df_csv["UTM_Norte"], errors="coerce")
 df_csv["UTM_Este"] = pd.to_numeric(df_csv["UTM_Este"], errors="coerce")
 df_csv["Huso"] = pd.to_numeric(df_csv["Huso"], errors="coerce")
 
-# Convertir explícitamente a float para permitir decimales aleatorios
-df_clean["UTM_Este"] = df_clean["UTM_Este"].astype(float)
-df_clean["UTM_Norte"] = df_clean["UTM_Norte"].astype(float)
+# Convertir explícitamente a float
+df_csv["UTM_Este"] = df_csv["UTM_Este"].astype(float)
+df_csv["UTM_Norte"] = df_csv["UTM_Norte"].astype(float)
 
 # --- APLICACIÓN DE DESPLAZAMIENTO ALEATORIO (+-10 METROS) ---
-filas_duplicadas = df_clean.duplicated(subset=["UTM_Este", "UTM_Norte", "Huso"], keep=False)
+filas_duplicadas = df_csv.duplicated(subset=["UTM_Este", "UTM_Norte", "Huso"], keep=False)
 
 if filas_duplicadas.any():
     ruido_este = np.random.uniform(-10, 10, size=filas_duplicadas.sum())
     ruido_norte = np.random.uniform(-10, 10, size=filas_duplicadas.sum())
     
-    df_clean.loc[filas_duplicadas, "UTM_Este"] += ruido_este
-    df_clean.loc[filas_duplicadas, "UTM_Norte"] += ruido_norte
+    df_csv.loc[filas_duplicadas, "UTM_Este"] += ruido_este
+    df_csv.loc[filas_duplicadas, "UTM_Norte"] += ruido_norte
     print(f"⚡ Se aplicó dispersión de +-10m a {filas_duplicadas.sum()} obras con coordenadas duplicadas.")
 
 # Reproyección UTM a WGS84 para todo el país
 gdfs_obras_nac = []
 for huso in [18, 19]:
-    df_huso = df_clean[df_clean["Huso"] == huso]
+    df_huso = df_csv[df_csv["Huso"] == huso]
     if not df_huso.empty:
         epsg_code = 32718 if huso == 18 else 32719
         gdf_h = gpd.GeoDataFrame(
@@ -132,6 +132,7 @@ for region_nom in regiones_chile:
         print(f"⚠️ No se encontraron límites para: {region_nom}")
         continue
 
+    # Cargar capas activas por defecto
     fg = folium.FeatureGroup(name=f"Región {region_nom}", overlay=True, show=True)
 
     # Dibujar Comunas
@@ -167,12 +168,12 @@ for region_nom in regiones_chile:
     }
     options_html += f'<option value="{reg_key}">{region_nom}</option>\n'
 
-# **7. Inyectar Menú Desplegable con JavaScript**
+# **7. Inyectar Menú Desplegable con JavaScript (Soporta ver todo el país)**
 menu_control_html = f"""
 <div style="position: fixed; top: 12px; left: 60px; z-index: 1000; background: white; padding: 10px 14px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.3); font-family: Arial, sans-serif;">
     <label for="regionSelect" style="font-weight: bold; font-size: 13px; color: #333;">🗺️ Seleccionar Región:</label><br>
     <select id="regionSelect" onchange="filtrarRegion(this.value)" style="margin-top: 6px; padding: 6px; font-size: 12px; border-radius: 4px; border: 1px solid #ccc; width: 220px; cursor: pointer;">
-        <option value="">-- Selecciona una Región --</option>
+        <option value="">-- Seleccionar Región --</option>
         {options_html}
     </select>
 </div>
@@ -183,18 +184,31 @@ var regionDict = {json.dumps(region_dict_js)};
 function filtrarRegion(selectedKey) {{
     var map = {mapa_web.get_name()};
 
-    for (var key in regionDict) {{
-        var fgVarName = regionDict[key].var;
-        var fg = window[fgVarName];
-
-        if (key === selectedKey) {{
+    // Si selecciona "-- Mostrar Todo el País --"
+    if (selectedKey === "") {{
+        for (var key in regionDict) {{
+            var fgVarName = regionDict[key].var;
+            var fg = window[fgVarName];
             if (fg && !map.hasLayer(fg)) {{
                 map.addLayer(fg);
             }}
-            map.fitBounds(regionDict[key].bounds);
-        }} else {{
-            if (fg && map.hasLayer(fg)) {{
-                map.removeLayer(fg);
+        }}
+        map.setView([-35.6751, -71.5430], 4);
+    }} else {{
+        // Si selecciona una región específica
+        for (var key in regionDict) {{
+            var fgVarName = regionDict[key].var;
+            var fg = window[fgVarName];
+
+            if (key === selectedKey) {{
+                if (fg && !map.hasLayer(fg)) {{
+                    map.addLayer(fg);
+                }}
+                map.fitBounds(regionDict[key].bounds);
+            }} else {{
+                if (fg && map.hasLayer(fg)) {{
+                    map.removeLayer(fg);
+                }}
             }}
         }}
     }}
@@ -225,4 +239,4 @@ mapa_web.get_root().html.add_child(Element(leyenda_html))
 # **9. Guardar Mapa Final**
 archivo_salida = "mapa_nacional_interactivo.html"
 mapa_web.save(archivo_salida)
-print(f"\n🚀 ¡Éxito! Mapa nacional interactivo generado con dispersión de +-10m en '{archivo_salida}'.")
+print(f"\n🚀 ¡Éxito! Mapa nacional interactivo generado correctamente en '{archivo_salida}'.")
