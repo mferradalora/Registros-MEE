@@ -150,7 +150,7 @@ for region_nom in regiones_chile:
 
     # Dibujar Obras con explore() y estilo personalizado
     if not gdf_obras_reg.empty:
-        gdf_obras_reg.drop(columns=["Region_Norm"], errors="ignore").explore(
+        gdf_obras_reg.drop(columns=["Region_Norm", "Tiene_Derecho_Glosa", "Tiene_Medicion_Glosa", "Tipo_Medidor", "Tiene_Telemetria"], errors="ignore").explore(
             m=fg,
             style_kwds={"style_function": estilo_naturaleza},
             marker_kwds={"radius": 5},
