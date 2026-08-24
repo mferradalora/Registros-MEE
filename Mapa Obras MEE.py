@@ -51,8 +51,8 @@ def filtrar_layer_local(gdf, region_nombre):
 # **4. Cargar, procesar y aplicar Jittering de +-10m a obras duplicadas**
 print("🔄 Cargando bases de datos nacionales...")
 try:
-    gdf_regiones_raw = gpd.read_file(carpeta_admin / "Regiones.geojson")
-    gdf_comunas_raw = gpd.read_file(carpeta_admin / "Comunas.geojson")
+    gdf_regiones_raw = gpd.read_file(carpeta_admin / "Regiones_Chile.geojson")
+    gdf_comunas_raw = gpd.read_file(carpeta_admin / "Comunas_Chile.geojson")
     df_csv = pd.read_csv(path_csv)
     print("✅ Archivos base cargados exitosamente.")
 except Exception as e:
