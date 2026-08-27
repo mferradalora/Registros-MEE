@@ -16,7 +16,7 @@ regiones_chile = [
 ]
 
 carpeta_admin = Path("divisiones_admin")
-path_csv = "01-07-2026 Obras MEE.csv"
+path_csv = "Listado Obras MEE.csv"
 
 # **2. Normalizador de Texto**
 def normalizar_texto(texto):
@@ -173,7 +173,7 @@ menu_control_html = f"""
 <div style="position: fixed; top: 12px; left: 60px; z-index: 1000; background: white; padding: 10px 14px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.3); font-family: Arial, sans-serif;">
     <label for="regionSelect" style="font-weight: bold; font-size: 13px; color: #333;">🗺️ Seleccionar Región:</label><br>
     <select id="regionSelect" onchange="filtrarRegion(this.value)" style="margin-top: 6px; padding: 6px; font-size: 12px; border-radius: 4px; border: 1px solid #ccc; width: 220px; cursor: pointer;">
-        <option value="">-- Seleccionar Región --</option>
+        <option value="">-- Todo el País --</option>
         {options_html}
     </select>
 </div>
@@ -219,7 +219,7 @@ function filtrarRegion(selectedKey) {{
 mapa_web.get_root().html.add_child(Element(menu_control_html))
 folium.LayerControl(collapsed=False).add_to(mapa_web)
 
-# **8. Inyectar Leyenda de Simbología de Naturaleza**
+# **8. Inyectar Leyenda de Simbología de Naturaleza con Fecha al Pie**
 leyenda_html = """
 <div style="position: fixed; bottom: 30px; right: 10px; z-index: 1000; background-color: white; padding: 10px 14px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.3); font-family: Arial, sans-serif; font-size: 12px;">
     <b style="font-size: 13px; color: #333;">Naturaleza de Obra</b>
@@ -231,6 +231,8 @@ leyenda_html = """
         <span style="height: 12px; width: 12px; background-color: #6c757d; border: 1.5px solid #212529; border-radius: 50%; display: inline-block; margin-right: 8px;"></span>
         <span>Subterránea</span>
     </div>
+    <hr style="margin: 8px 0 6px 0; border: 0; border-top: 1px solid #eee;">
+    <div style="font-size: 11px; color: #666; font-weight: normal;">Actualización: Julio 2026</div>
 </div>
 """
 
