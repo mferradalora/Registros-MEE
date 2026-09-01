@@ -10,7 +10,7 @@ tiempo_inicio = time.time()
 # -------------------------------------------------------------------------
 # 1. PARÁMETROS Y CONFIGURACIÓN
 # -------------------------------------------------------------------------
-obras_a_descargar = ["OR-1302-3", "OB-0601-16"]
+obras_a_descargar = ["OR-1302-3", "OB-0601-16"] # EJEMPLO
 path_csv = "Listado_Obras_MEE.csv"
 
 # Fecha límite superior dinámica (hoy)
