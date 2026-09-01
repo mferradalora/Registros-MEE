@@ -29,7 +29,7 @@ regiones_provincias = {
 }
 
 carpeta_admin = Path("divisiones_admin")
-path_csv = "Listado Obras MEE.csv"  # <-- NUEVO ARCHIVO
+path_csv = "Listado_Obras_MEE.csv"
 
 # **2. Normalizador de Texto**
 def normalizar_texto(texto):
@@ -328,6 +328,6 @@ leyenda_html = """
 mapa_web.get_root().html.add_child(Element(leyenda_html))
 
 # **9. Guardar Mapa Final**
-archivo_salida = "Mapa Obras MEE.html"
+archivo_salida = "Mapa_Obras_MEE.html"
 mapa_web.save(archivo_salida)
 print(f"\n🚀 ¡Éxito! Mapa nacional interactivo con límites provinciales generado en '{archivo_salida}'.")
