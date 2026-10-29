@@ -17,14 +17,8 @@ import folium
 
 # Configuración de URLs y directorios
 RENDER_URL = "https://registros-mee.onrender.com".rstrip("/")
-carpeta_admin = Path("divisiones_admin")
-
-# Priorizar catálogo oficial
-path_csv = Path("catalogo_obras_mee.csv")
-if not path_csv.exists():
-    path_csv = Path("Listado_Obras_MEE.csv")
-if not path_csv.exists() and Path("data/catalogo_obras_mee.csv").exists():
-    path_csv = Path("data/catalogo_obras_mee.csv")
+carpeta_admin = Path("data")
+path_csv = Path("data/catalogo_obras_mee.csv")
 
 regiones_provincias = {
     "Arica y Parinacota": ["Arica", "Parinacota"],
