@@ -2,6 +2,8 @@ fastapi
 uvicorn
 requests
 pandas
+python-calamine
+xlrd
 openpyxl
 lxml
 html5lib
