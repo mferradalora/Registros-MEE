@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
-Generador de Mapa Interactivo MEE DGA con enlace al visor de series de tiempo.
+Generador de Mapa Interactivo MEE DGA con popup ampliado de metadatos y cálculo de Caudal Derecho.
 Salida: index.html (Optimizado para GitHub Pages).
 """
 
@@ -16,9 +16,15 @@ import pandas as pd
 import folium
 
 # Configuración de URLs y directorios
-RENDER_URL = "https://registros-mee.onrender.com"  # Reemplazar con el subdominio asignado en Render
-carpeta_admin = Path("data")
-path_csv = "data/catalogo_obras_mee.csv"
+RENDER_URL = "https://registros-mee.onrender.com".rstrip("/")
+carpeta_admin = Path("divisiones_admin")
+
+# Priorizar catálogo oficial
+path_csv = Path("catalogo_obras_mee.csv")
+if not path_csv.exists():
+    path_csv = Path("Listado_Obras_MEE.csv")
+if not path_csv.exists() and Path("data/catalogo_obras_mee.csv").exists():
+    path_csv = Path("data/catalogo_obras_mee.csv")
 
 regiones_provincias = {
     "Arica y Parinacota": ["Arica", "Parinacota"],
@@ -67,26 +73,46 @@ def filtrar_layer_local(gdf, region_nombre):
     return gdf.iloc[0:0]
 
 
-print("🔄 Cargando bases de datos nacionales...")
+print(f"🔄 Cargando base de datos desde '{path_csv}'...")
 gdf_regiones_raw = gpd.read_file(carpeta_admin / "Regiones_Chile.geojson")
 gdf_provincias_raw = gpd.read_file(carpeta_admin / "Provincias_Chile.geojson")
-df_csv = pd.read_csv(path_csv)
+df_csv = pd.read_csv(path_csv, low_memory=False)
 
+# Sanitización de datos administrativos
 df_csv["Provincia"] = df_csv["Provincia"].replace(r'^\s*$', np.nan, regex=True).fillna("Sin Provincia")
 df_csv["Region_Norm"] = df_csv["Region"].apply(normalizar_texto)
 df_csv["Provincia_Norm"] = df_csv["Provincia"].apply(normalizar_texto)
 
-df_csv["UTM_Norte"] = pd.to_numeric(df_csv["UTM_Norte"], errors="coerce").astype(float)
-df_csv["UTM_Este"] = pd.to_numeric(df_csv["UTM_Este"], errors="coerce").astype(float)
+# Conversión y respaldo de coordenadas UTM originales
+df_csv["UTM_Norte"] = pd.to_numeric(df_csv["UTM_Norte"], errors="coerce")
+df_csv["UTM_Este"] = pd.to_numeric(df_csv["UTM_Este"], errors="coerce")
 df_csv["Huso"] = pd.to_numeric(df_csv["Huso"], errors="coerce")
 
-# Desplazamiento de puntos superpuestos
+df_csv["UTM_Norte_Orig"] = df_csv["UTM_Norte"].copy()
+df_csv["UTM_Este_Orig"] = df_csv["UTM_Este"].copy()
+
+# Cálculo de Caudal Derecho (l/s) como el promedio de los 12 meses
+meses_cols = [
+    'Caudal_Ene_ls', 'Caudal_Feb_ls', 'Caudal_Mar_ls', 'Caudal_Abr_ls',
+    'Caudal_May_ls', 'Caudal_Jun_ls', 'Caudal_Jul_ls', 'Caudal_Ago_ls',
+    'Caudal_Sep_ls', 'Caudal_Oct_ls', 'Caudal_Nov_ls', 'Caudal_Dic_ls'
+]
+cols_existentes = [c for c in meses_cols if c in df_csv.columns]
+if cols_existentes:
+    df_caudales = df_csv[cols_existentes].apply(pd.to_numeric, errors='coerce')
+    df_csv["Caudal_Derecho_ls"] = df_caudales.mean(axis=1, skipna=True)
+else:
+    df_csv["Caudal_Derecho_ls"] = np.nan
+
+# Desplazamiento aleatorio (+-10 metros) para evitar superposición visual de puntos
 filas_dup = df_csv.duplicated(subset=["UTM_Este", "UTM_Norte", "Huso"], keep=False)
 if filas_dup.any():
-    df_csv.loc[filas_dup, "UTM_Este"] += np.random.uniform(-10, 10, size=filas_dup.sum())
-    df_csv.loc[filas_dup, "UTM_Norte"] += np.random.uniform(-10, 10, size=filas_dup.sum())
+    ruido_este = np.random.uniform(-10, 10, size=filas_dup.sum())
+    ruido_norte = np.random.uniform(-10, 10, size=filas_dup.sum())
+    df_csv.loc[filas_dup, "UTM_Este"] += ruido_este
+    df_csv.loc[filas_dup, "UTM_Norte"] += ruido_norte
 
-# Reproyección a WGS84
+# Reproyección a WGS84 (EPSG:4326)
 gdfs_obras_nac = []
 for huso in [18, 19]:
     df_h = df_csv[df_csv["Huso"] == huso]
@@ -103,6 +129,7 @@ gdf_obras_nac = pd.concat(gdfs_obras_nac, ignore_index=True) if gdfs_obras_nac e
 gdf_obras_nac["latitud"] = gdf_obras_nac.geometry.y
 gdf_obras_nac["longitud"] = gdf_obras_nac.geometry.x
 
+# Inicializar Mapa Base Folium
 mapa_web = folium.Map(location=[-35.6751, -71.5430], zoom_start=4, tiles=None)
 folium.TileLayer(tiles='OpenStreetMap', name='OpenStreetMap', overlay=False, control=True, show=True).add_to(mapa_web)
 folium.TileLayer(tiles='https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}', attr='Google', name='Híbrido (Google)', overlay=False, control=True, show=False).add_to(mapa_web)
@@ -112,34 +139,70 @@ prov_dict_js = {}
 options_html = ""
 
 
+def format_campo(val):
+    """Devuelve 'nan' si el valor es nulo o vacío; de lo contrario su representación en texto."""
+    if pd.isna(val) or val is None:
+        return "nan"
+    s = str(val).strip()
+    return s if s != "" else "nan"
+
+
 def crear_popup_obra(row):
     cod = str(row.get("Codigo_Obra", "S/C")).strip()
-    usuario = str(row.get("Usuario", "")).strip()
-    nat = str(row.get("Naturaleza", "Subterránea")).strip()
+    nat = format_campo(row.get("Naturaleza", "Subterránea"))
     color_titulo = "#0056b3" if "superficial" in nat.lower() else "#212529"
 
+    usuario = format_campo(row.get("Usuario"))
+    rut_usuario = format_campo(row.get("RUT_Usuario"))
+    tipo_persona = format_campo(row.get("Tipo_Persona"))
+    comuna = format_campo(row.get("Comuna"))
+    provincia = format_campo(row.get("Provincia"))
+    region = format_campo(row.get("Region"))
+    cuenca = format_campo(row.get("Cuenca"))
+
+    # Coordenadas UTM originales en formato entero
+    norte_orig = row.get("UTM_Norte_Orig")
+    este_orig = row.get("UTM_Este_Orig")
+    utm_norte = f"{int(round(norte_orig))}" if pd.notnull(norte_orig) else "nan"
+    utm_este = f"{int(round(este_orig))}" if pd.notnull(este_orig) else "nan"
+
+    fecha_reg = format_campo(row.get("Fecha_Registro_DGA"))
+
+    # Caudal de derecho formateado (nan si no hay datos por mes)
+    val_caudal = row.get("Caudal_Derecho_ls")
+    if pd.isna(val_caudal):
+        caudal_der = "nan"
+    else:
+        caudal_der = f"{round(float(val_caudal), 2)}"
+
     return f"""
-    <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; font-size: 12px; min-width: 220px;">
+    <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; font-size: 12px; min-width: 250px; line-height: 1.5;">
         <b style="color: {color_titulo}; font-size: 13px;">{cod}</b><br>
-        <b>Titular:</b> {usuario}<br>
+        <b>Usuario:</b> {usuario}<br>
+        <b>Rut Usuario:</b> {rut_usuario}<br>
+        <b>Tipo Persona:</b> {tipo_persona}<br>
         <b>Naturaleza:</b> {nat}<br>
-        <b>Comuna:</b> {row.get('Comuna', '')}<br>
-        <b>Provincia:</b> {row.get('Provincia', '')}<br>
-        <b>Último Caudal:</b> {row.get('Ultimo_Caudal_Medido_ls', '0')} l/s<br>
-        <b>Nivel Freático:</b> {row.get('Nivel_Freatico_m', 'S/I')} m<br>
+        <b>Comuna:</b> {comuna}<br>
+        <b>Provincia:</b> {provincia}<br>
+        <b>Region:</b> {region}<br>
+        <b>Cuenca:</b> {cuenca}<br>
+        <b>UTM Norte:</b> {utm_norte}<br>
+        <b>UTM Este:</b> {utm_este}<br>
+        <b>Fecha Registro DGA:</b> {fecha_reg}<br>
+        <b>Caudal Derecho (l/s):</b> {caudal_der}
 
         <div style="margin-top: 10px; padding-top: 8px; border-top: 1px solid #e2e8f0; text-align: center;">
             <a href="{RENDER_URL}/visor?codigo={cod}" 
                target="_blank" 
                style="display: block; background-color: #0284c7; color: white; padding: 7px 10px; font-size: 11px; font-weight: bold; text-decoration: none; border-radius: 4px; box-shadow: 0 1px 2px rgba(0,0,0,0.15);">
-                📥 Ver y Descargar Mediciones MEE
+                📥 Descargar Mediciones MEE
             </a>
         </div>
     </div>
     """
 
 
-print("🛠️ Generando capas regionales, provinciales y marcadores...")
+print("🛠️ Generando capas y marcadores con metadatos actualizados...")
 
 for region_nom, provincias in regiones_provincias.items():
     reg_key = normalizar_texto(region_nom).replace(' ', '_')
@@ -161,7 +224,7 @@ for region_nom, provincias in regiones_provincias.items():
     }
     options_html += f'<option value="{reg_key}">{region_nom}</option>\n'
 
-    # Polígono regional estático (sin sombreado hover)
+    # Polígono regional estático
     fg_border = folium.FeatureGroup(name=f"Límite {region_nom}", overlay=True, show=True, control=False)
     if not capa_reg.empty:
         folium.GeoJson(
@@ -194,29 +257,26 @@ for region_nom, provincias in regiones_provincias.items():
         else:
             p_bounds = region_dict_js[reg_key]["bounds"]
 
-        # Marcadores circulares con popup interactivo y botón
+        # Marcadores con el nuevo popup
         for _, row in gdf_obras_prov.iterrows():
             es_sup = "superficial" in str(row.get("Naturaleza", "")).lower()
-            color = "#0056b3" if es_sup else "#212529"
-            fill_color = "#007bff" if es_sup else "#6c757d"
-
             folium.CircleMarker(
                 location=[row["latitud"], row["longitud"]],
                 radius=5,
-                color=color,
+                color="#0056b3" if es_sup else "#212529",
                 fill=True,
-                fill_color=fill_color,
+                fill_color="#007bff" if es_sup else "#6c757d",
                 fill_opacity=0.85,
                 weight=1.5,
                 tooltip=f"<b>{row.get('Codigo_Obra', '')}</b> - {row.get('Usuario', '')}",
-                popup=folium.Popup(crear_popup_obra(row), max_width=320)
+                popup=folium.Popup(crear_popup_obra(row), max_width=340)
             ).add_to(fg_prov)
 
         fg_prov.add_to(mapa_web)
         prov_dict_js[prov_key] = {"name": prov_nom, "var": fg_prov.get_name(), "bounds": p_bounds}
         region_dict_js[reg_key]["provinces"].append(prov_key)
 
-    # Obras sin provincia
+    # Obras huérfanas sin provincia asignada
     obras_huerfanas = gdf_obras_reg[~gdf_obras_reg.index.isin(obras_asignadas_idx)]
     if not obras_huerfanas.empty:
         h_key = "sin_prov_" + reg_key
@@ -232,13 +292,13 @@ for region_nom, provincias in regiones_provincias.items():
                 fill_opacity=0.85,
                 weight=1.5,
                 tooltip=f"<b>{row.get('Codigo_Obra', '')}</b> - {row.get('Usuario', '')}",
-                popup=folium.Popup(crear_popup_obra(row), max_width=320)
+                popup=folium.Popup(crear_popup_obra(row), max_width=340)
             ).add_to(fg_huerfana)
         fg_huerfana.add_to(mapa_web)
         prov_dict_js[h_key] = {"name": "Obras sin Provincia", "var": fg_huerfana.get_name(), "bounds": region_dict_js[reg_key]["bounds"]}
         region_dict_js[reg_key]["provinces"].append(h_key)
 
-# Inyección de selectores
+# Controles interactivos JavaScript
 menu_control_html = f"""
 <div style="position: fixed; top: 12px; left: 60px; z-index: 1000; background: white; padding: 10px 14px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.3); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; min-width: 240px;">
     <label for="regionSelect" style="font-weight: bold; font-size: 13px; color: #333;">🗺️ Seleccionar Región:</label><br>
@@ -355,6 +415,6 @@ mapa_web.get_root().html.add_child(Element(menu_control_html))
 mapa_web.get_root().html.add_child(Element(leyenda_html))
 folium.LayerControl(collapsed=False).add_to(mapa_web)
 
-archivo_salida = "index.html"  # Para publicación directa en GitHub Pages
+archivo_salida = "index.html"
 mapa_web.save(archivo_salida)
 print(f"\n🚀 ¡Éxito! Mapa nacional interactivo MEE generado en '{archivo_salida}'.")
