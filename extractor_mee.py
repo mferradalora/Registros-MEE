@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Módulo de extracción y normalización de series temporales MEE (DGA SNIA).
+Detecta encabezados multinivel y parsea tanto HTML/XLS como Excel nativo.
 """
 
 import io
@@ -29,13 +30,16 @@ HEADERS_BASE = {
 
 def obtener_token_dga():
     """Genera token JWT Bearer en el servicio REST de la DGA."""
+    print("🔑 Solicitando token de autorización a DGA SNIA...", flush=True)
     resp = requests.post(URL_AUTH, json=AUTH_PAYLOAD, headers=HEADERS_BASE, timeout=15)
     resp.raise_for_status()
-    return resp.json().get("accessToken")
+    token = resp.json().get("accessToken")
+    print("🔑 Token DGA adquirido exitosamente.", flush=True)
+    return token
 
 
 def descargar_reporte_crudo(codigo_obra: str, id_obra: int, fecha_desde_dt: datetime.date):
-    """Descarga el reporte detallado desde la API de la DGA."""
+    """Solicita el reporte de mediciones detallado a la DGA."""
     token = obtener_token_dga()
     session = requests.Session()
 
@@ -66,28 +70,33 @@ def descargar_reporte_crudo(codigo_obra: str, id_obra: int, fecha_desde_dt: date
         },
     }
 
-    resp = session.post(URL_REPORTE, headers=headers, json=payload, timeout=45)
+    print(f"📡 Enviando solicitud a DGA para obra {codigo_obra} (ID: {id_obra}, Desde: {fecha_desde_dt})...", flush=True)
+    resp = session.post(URL_REPORTE, headers=headers, json=payload, timeout=60)
+    
     if resp.status_code == 401:
+        print("🔄 Token expirado, renovando...", flush=True)
         token = obtener_token_dga()
         headers['authorization'] = f'Bearer {token}'
-        resp = session.post(URL_REPORTE, headers=headers, json=payload, timeout=45)
+        resp = session.post(URL_REPORTE, headers=headers, json=payload, timeout=60)
 
+    print(f"📦 Respuesta DGA recibida (Código HTTP: {resp.status_code}, Tamaño: {len(resp.content):,} bytes).", flush=True)
     resp.raise_for_status()
     return resp.content
 
 
 def parsear_reporte_mee(content_bytes: bytes, codigo_obra: str) -> pd.DataFrame:
-    """Convierte el archivo XLS/HTML devuelto por DGA en un DataFrame normalizado."""
+    """Convierte el archivo devuelto por la DGA detectando la fila real de datos."""
     if not content_bytes:
         return pd.DataFrame()
 
     df_raw = None
-    # 1. Intentar lectura como tabla HTML (formato común devuelto con extensión .xls)
+
+    # 1. Intentar lectura como tabla HTML (formato habitual de DGA bajo extensión .xls)
     try:
         dfs = pd.read_html(io.BytesIO(content_bytes))
         for d in dfs:
-            cols = [str(c).lower() for c in d.columns]
-            if any("fecha" in c or "caudal" in c for c in cols):
+            texto_tabla = ' '.join(str(v).lower() for v in d.head(10).values.flatten())
+            if "caudal" in texto_tabla or "código" in texto_tabla or "codigo" in texto_tabla:
                 df_raw = d
                 break
         if df_raw is None and len(dfs) > 0:
@@ -95,52 +104,64 @@ def parsear_reporte_mee(content_bytes: bytes, codigo_obra: str) -> pd.DataFrame:
     except Exception:
         pass
 
-    # 2. Si falla HTML, intentar lectura directa con Excel
+    # 2. Si no es HTML, intentar lectura directa con Excel
     if df_raw is None:
         try:
-            df_raw = pd.read_excel(io.BytesIO(content_bytes))
-        except Exception:
+            df_raw = pd.read_excel(io.BytesIO(content_bytes), header=None)
+        except Exception as e:
+            print(f"❌ Error al interpretar archivo Excel: {e}", flush=True)
             return pd.DataFrame()
 
-    if df_raw.empty:
+    if df_raw is None or df_raw.empty:
+        print("⚠️ El archivo devuelto no contiene tablas válidas.", flush=True)
         return pd.DataFrame()
 
-    # Si hay encabezados multinivel, aplanarlos
-    if isinstance(df_raw.columns, pd.MultiIndex):
-        df_raw.columns = ['_'.join(str(c) for c in col).strip() for col in df_raw.columns]
+    # 3. Localizar dinámicamente la fila de encabezados reales
+    header_idx = None
+    for idx in range(min(15, len(df_raw))):
+        fila_str = ' '.join(str(v).lower() for v in df_raw.iloc[idx].values)
+        if ("código" in fila_str or "codigo" in fila_str or "nro" in fila_str) and ("caudal" in fila_str or "fecha" in fila_str):
+            header_idx = idx
+            break
 
-    # Mapeo flexible de columnas
+    if header_idx is not None:
+        print(f"🔍 Encabezados detectados en la fila {header_idx + 1}.", flush=True)
+        new_cols = [str(v).strip() for v in df_raw.iloc[header_idx].values]
+        df = df_raw.iloc[header_idx + 1:].copy()
+        df.columns = new_cols
+    else:
+        df = df_raw.copy()
+
+    # 4. Normalizar nombres de columnas
     col_map = {}
-    for c in df_raw.columns:
+    for c in df.columns:
         c_clean = str(c).lower().strip()
-        if "fecha" in c_clean and ("hora" in c_clean or "medici" in c_clean):
-            col_map[c] = "fecha_hora"
-        elif "fecha" in c_clean and "fecha_hora" not in col_map.values():
+        if "fecha" in c_clean and ("dd/mm/yyyy" in c_clean or "medici" in c_clean) and "registro" not in c_clean:
             col_map[c] = "fecha"
-        elif "hora" in c_clean and "fecha_hora" not in col_map.values():
+        elif "hora" in c_clean and "medici" in c_clean:
             col_map[c] = "hora"
         elif "caudal" in c_clean:
             col_map[c] = "caudal_ls"
-        elif "totalizador" in c_clean or "volumen" in c_clean or "acumulado" in c_clean:
+        elif any(k in c_clean for k in ["totalizador", "volumen", "acumulado"]):
             col_map[c] = "totalizador_m3"
-        elif "nivel" in c_clean or "freatico" in c_clean:
+        elif any(k in c_clean for k in ["altura", "limnim", "freatico", "nivel", "profundidad"]):
             col_map[c] = "nivel_m"
 
-    df = df_raw.rename(columns=col_map).copy()
+    df = df.rename(columns=col_map).copy()
 
-    # Combinar fecha y hora si vinieron separadas
-    if "fecha" in df.columns and "hora" in df.columns and "fecha_hora" not in df.columns:
+    # 5. Unificar Fecha y Hora en una sola columna temporal
+    if "fecha" in df.columns and "hora" in df.columns:
         df["fecha_hora"] = df["fecha"].astype(str).str.strip() + " " + df["hora"].astype(str).str.strip()
-    elif "fecha" in df.columns and "fecha_hora" not in df.columns:
-        df["fecha_hora"] = df["fecha"]
-
-    if "fecha_hora" not in df.columns:
+    elif "fecha" in df.columns:
+        df["fecha_hora"] = df["fecha"].astype(str).str.strip()
+    elif "fecha_hora" not in df.columns:
+        print(f"⚠️ Columnas presentes tras el mapeo: {list(df.columns)}", flush=True)
         return pd.DataFrame()
 
     df["fecha_hora"] = pd.to_datetime(df["fecha_hora"], dayfirst=True, errors="coerce")
     df = df.dropna(subset=["fecha_hora"])
 
-    # Limpieza de columnas numéricas
+    # 6. Limpieza de columnas numéricas
     for metrica in ["caudal_ls", "totalizador_m3", "nivel_m"]:
         if metrica in df.columns:
             df[metrica] = (
@@ -156,14 +177,14 @@ def parsear_reporte_mee(content_bytes: bytes, codigo_obra: str) -> pd.DataFrame:
 
     df["codigo_obra"] = codigo_obra
     df = df.sort_values(by="fecha_hora").reset_index(drop=True)
+    print(f"✅ Se procesaron exitosamente {len(df):,} filas de mediciones.", flush=True)
     return df[["codigo_obra", "fecha_hora", "caudal_ls", "totalizador_m3", "nivel_m"]]
 
 
 def obtener_mediciones_obra(codigo_obra: str, id_obra: int, fecha_desde_dt: datetime.date) -> pd.DataFrame:
-    """Función de alto nivel que descarga y entrega el DataFrame limpio."""
     try:
         raw_bytes = descargar_reporte_crudo(codigo_obra, id_obra, fecha_desde_dt)
         return parsear_reporte_mee(raw_bytes, codigo_obra)
     except Exception as e:
-        print(f"Error extrayendo reporte MEE para {codigo_obra}: {e}", flush=True)
+        print(f"❌ Error en el proceso de extracción para {codigo_obra}: {e}", flush=True)
         return pd.DataFrame()
