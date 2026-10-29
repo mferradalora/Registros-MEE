@@ -1,0 +1,7 @@
+fastapi
+uvicorn
+requests
+pandas
+openpyxl
+lxml
+html5lib
