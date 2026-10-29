@@ -18,7 +18,7 @@ import folium
 # Configuración de URLs y directorios
 RENDER_URL = "https://registros-mee.onrender.com"  # Reemplazar con el subdominio asignado en Render
 carpeta_admin = Path("data")
-path_csv = "catalogo_obras_mee.csv" if Path("catalogo_obras_mee.csv").exists() else "Listado_Obras_MEE.csv"
+path_csv = "data/catalogo_obras_mee.csv"
 
 regiones_provincias = {
     "Arica y Parinacota": ["Arica", "Parinacota"],
