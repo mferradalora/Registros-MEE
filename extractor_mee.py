@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Módulo de extracción y normalización de series temporales MEE (DGA SNIA).
-Detecta encabezados multinivel y parsea tanto HTML/XLS como Excel nativo.
+Compatible con calamine, xlrd y HTML tables.
 """
 
 import io
@@ -71,17 +71,38 @@ def descargar_reporte_crudo(codigo_obra: str, id_obra: int, fecha_desde_dt: date
     }
 
     print(f"📡 Enviando solicitud a DGA para obra {codigo_obra} (ID: {id_obra}, Desde: {fecha_desde_dt})...", flush=True)
-    resp = session.post(URL_REPORTE, headers=headers, json=payload, timeout=60)
+    resp = session.post(URL_REPORTE, headers=headers, json=payload, timeout=90)
     
     if resp.status_code == 401:
         print("🔄 Token expirado, renovando...", flush=True)
         token = obtener_token_dga()
         headers['authorization'] = f'Bearer {token}'
-        resp = session.post(URL_REPORTE, headers=headers, json=payload, timeout=60)
+        resp = session.post(URL_REPORTE, headers=headers, json=payload, timeout=90)
 
     print(f"📦 Respuesta DGA recibida (Código HTTP: {resp.status_code}, Tamaño: {len(resp.content):,} bytes).", flush=True)
     resp.raise_for_status()
     return resp.content
+
+
+def combinar_fecha_hora(f_val, h_val):
+    if pd.isna(f_val):
+        return pd.NaT
+    if isinstance(f_val, (datetime.date, pd.Timestamp)):
+        f_str = f_val.strftime("%d/%m/%Y")
+    else:
+        f_str = str(f_val).strip().split(' ')[0]
+        
+    if pd.isna(h_val):
+        h_str = "00:00"
+    elif isinstance(h_val, (datetime.time, pd.Timestamp)):
+        h_str = h_val.strftime("%H:%M")
+    else:
+        h_str = str(h_val).strip()
+        partes = h_str.split(':')
+        if len(partes) > 2:
+            h_str = f"{partes[0]}:{partes[1]}"
+            
+    return f"{f_str} {h_str}"
 
 
 def parsear_reporte_mee(content_bytes: bytes, codigo_obra: str) -> pd.DataFrame:
@@ -91,32 +112,51 @@ def parsear_reporte_mee(content_bytes: bytes, codigo_obra: str) -> pd.DataFrame:
 
     df_raw = None
 
-    # 1. Intentar lectura como tabla HTML (formato habitual de DGA bajo extensión .xls)
+    # Intentos de lectura en cascada
+    # 1. Intentar con engine='calamine' (ultrarrápido para .xls y .xlsx)
     try:
-        dfs = pd.read_html(io.BytesIO(content_bytes))
-        for d in dfs:
-            texto_tabla = ' '.join(str(v).lower() for v in d.head(10).values.flatten())
-            if "caudal" in texto_tabla or "código" in texto_tabla or "codigo" in texto_tabla:
-                df_raw = d
-                break
-        if df_raw is None and len(dfs) > 0:
-            df_raw = dfs[0]
+        df_raw = pd.read_excel(io.BytesIO(content_bytes), engine="calamine", header=None)
+        print("⚡ Archivo interpretado con motor Calamine.", flush=True)
     except Exception:
         pass
 
-    # 2. Si no es HTML, intentar lectura directa con Excel
+    # 2. Intentar con engine='xlrd'
     if df_raw is None:
         try:
-            df_raw = pd.read_excel(io.BytesIO(content_bytes), header=None)
-        except Exception as e:
-            print(f"❌ Error al interpretar archivo Excel: {e}", flush=True)
-            return pd.DataFrame()
+            df_raw = pd.read_excel(io.BytesIO(content_bytes), engine="xlrd", header=None)
+            print("📄 Archivo interpretado con motor xlrd.", flush=True)
+        except Exception:
+            pass
+
+    # 3. Intentar con openpyxl
+    if df_raw is None:
+        try:
+            df_raw = pd.read_excel(io.BytesIO(content_bytes), engine="openpyxl", header=None)
+            print("📄 Archivo interpretado con motor openpyxl.", flush=True)
+        except Exception:
+            pass
+
+    # 4. Intentar lectura como tabla HTML
+    if df_raw is None:
+        try:
+            dfs = pd.read_html(io.BytesIO(content_bytes))
+            for d in dfs:
+                row_str = ' '.join(str(v).lower() for v in d.head(10).values.flatten())
+                if "caudal" in row_str or "código" in row_str or "codigo" in row_str:
+                    df_raw = d
+                    break
+            if df_raw is None and len(dfs) > 0:
+                df_raw = dfs[0]
+            if df_raw is not None:
+                print("🌐 Archivo interpretado como tabla HTML.", flush=True)
+        except Exception:
+            pass
 
     if df_raw is None or df_raw.empty:
-        print("⚠️ El archivo devuelto no contiene tablas válidas.", flush=True)
+        print("❌ No fue posible interpretar la estructura del archivo descargado.", flush=True)
         return pd.DataFrame()
 
-    # 3. Localizar dinámicamente la fila de encabezados reales
+    # Localizar dinámicamente la fila de encabezados reales
     header_idx = None
     for idx in range(min(15, len(df_raw))):
         fila_str = ' '.join(str(v).lower() for v in df_raw.iloc[idx].values)
@@ -132,7 +172,7 @@ def parsear_reporte_mee(content_bytes: bytes, codigo_obra: str) -> pd.DataFrame:
     else:
         df = df_raw.copy()
 
-    # 4. Normalizar nombres de columnas
+    # Normalizar nombres de columnas
     col_map = {}
     for c in df.columns:
         c_clean = str(c).lower().strip()
@@ -149,19 +189,19 @@ def parsear_reporte_mee(content_bytes: bytes, codigo_obra: str) -> pd.DataFrame:
 
     df = df.rename(columns=col_map).copy()
 
-    # 5. Unificar Fecha y Hora en una sola columna temporal
+    # Unificar Fecha y Hora en una sola columna temporal
     if "fecha" in df.columns and "hora" in df.columns:
-        df["fecha_hora"] = df["fecha"].astype(str).str.strip() + " " + df["hora"].astype(str).str.strip()
+        df["fecha_hora"] = [combinar_fecha_hora(f, h) for f, h in zip(df["fecha"], df["hora"])]
     elif "fecha" in df.columns:
         df["fecha_hora"] = df["fecha"].astype(str).str.strip()
     elif "fecha_hora" not in df.columns:
-        print(f"⚠️ Columnas presentes tras el mapeo: {list(df.columns)}", flush=True)
+        print(f"⚠️ Columnas presentes tras mapeo: {list(df.columns)}", flush=True)
         return pd.DataFrame()
 
-    df["fecha_hora"] = pd.to_datetime(df["fecha_hora"], dayfirst=True, errors="coerce")
+    df["fecha_hora"] = pd.to_datetime(df["fecha_hora"], format="%d/%m/%Y %H:%M", errors="coerce")
     df = df.dropna(subset=["fecha_hora"])
 
-    # 6. Limpieza de columnas numéricas
+    # Limpieza de valores numéricos
     for metrica in ["caudal_ls", "totalizador_m3", "nivel_m"]:
         if metrica in df.columns:
             df[metrica] = (
