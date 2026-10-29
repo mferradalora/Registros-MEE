@@ -16,7 +16,7 @@ import pandas as pd
 import folium
 
 # Configuración de URLs y directorios
-RENDER_URL = "https://registros-mee.onrender.com".rstrip("/")
+RENDER_URL = "https://registros-mee.onrender.com"
 carpeta_admin = Path("data")
 path_csv = Path("data/catalogo_obras_mee.csv")
 
@@ -78,14 +78,15 @@ df_csv["Region_Norm"] = df_csv["Region"].apply(normalizar_texto)
 df_csv["Provincia_Norm"] = df_csv["Provincia"].apply(normalizar_texto)
 
 # Conversión y respaldo de coordenadas UTM originales
-df_csv["UTM_Norte"] = pd.to_numeric(df_csv["UTM_Norte"], errors="coerce")
-df_csv["UTM_Este"] = pd.to_numeric(df_csv["UTM_Este"], errors="coerce")
+df_csv["UTM_Norte_Orig"] = pd.to_numeric(df_csv["UTM_Norte"], errors="coerce")
+df_csv["UTM_Este_Orig"] = pd.to_numeric(df_csv["UTM_Este"], errors="coerce")
+
+# Conversión explícita a float para permitir suma de ruido decimal sin LossySetitemError
+df_csv["UTM_Norte"] = df_csv["UTM_Norte_Orig"].astype(float)
+df_csv["UTM_Este"] = df_csv["UTM_Este_Orig"].astype(float)
 df_csv["Huso"] = pd.to_numeric(df_csv["Huso"], errors="coerce")
 
-df_csv["UTM_Norte_Orig"] = df_csv["UTM_Norte"].copy()
-df_csv["UTM_Este_Orig"] = df_csv["UTM_Este"].copy()
-
-# Cálculo de Caudal Derecho (l/s) como el promedio de los 12 meses
+# Cálculo de Caudal Derecho (l/s) como promedio de los 12 meses
 meses_cols = [
     'Caudal_Ene_ls', 'Caudal_Feb_ls', 'Caudal_Mar_ls', 'Caudal_Abr_ls',
     'Caudal_May_ls', 'Caudal_Jun_ls', 'Caudal_Jul_ls', 'Caudal_Ago_ls',
@@ -134,7 +135,6 @@ options_html = ""
 
 
 def format_campo(val):
-    """Devuelve 'nan' si el valor es nulo o vacío; de lo contrario su representación en texto."""
     if pd.isna(val) or val is None:
         return "nan"
     s = str(val).strip()
@@ -154,7 +154,6 @@ def crear_popup_obra(row):
     region = format_campo(row.get("Region"))
     cuenca = format_campo(row.get("Cuenca"))
 
-    # Coordenadas UTM originales en formato entero
     norte_orig = row.get("UTM_Norte_Orig")
     este_orig = row.get("UTM_Este_Orig")
     utm_norte = f"{int(round(norte_orig))}" if pd.notnull(norte_orig) else "nan"
@@ -162,7 +161,6 @@ def crear_popup_obra(row):
 
     fecha_reg = format_campo(row.get("Fecha_Registro_DGA"))
 
-    # Caudal de derecho formateado (nan si no hay datos por mes)
     val_caudal = row.get("Caudal_Derecho_ls")
     if pd.isna(val_caudal):
         caudal_der = "nan"
@@ -189,7 +187,7 @@ def crear_popup_obra(row):
             <a href="{RENDER_URL}/visor?codigo={cod}" 
                target="_blank" 
                style="display: block; background-color: #0284c7; color: white; padding: 7px 10px; font-size: 11px; font-weight: bold; text-decoration: none; border-radius: 4px; box-shadow: 0 1px 2px rgba(0,0,0,0.15);">
-                📥 Descargar Mediciones MEE
+                📥 Ver y Descargar Mediciones MEE
             </a>
         </div>
     </div>
@@ -224,191 +222,4 @@ for region_nom, provincias in regiones_provincias.items():
         folium.GeoJson(
             capa_reg,
             interactive=False,
-            style_function=lambda x: {"color": "black", "fillOpacity": 0, "weight": 2.2}
-        ).add_to(fg_border)
-    fg_border.add_to(mapa_web)
-
-    obras_asignadas_idx = set()
-
-    for prov_nom in provincias:
-        prov_key = normalizar_texto(prov_nom).replace(' ', '_') + "_" + reg_key
-        capa_prov = filtrar_layer_local(gdf_provincias_raw, prov_nom)
-
-        target_norm_prov = normalizar_texto(prov_nom)
-        gdf_obras_prov = gdf_obras_reg[gdf_obras_reg["Provincia_Norm"].str.contains(target_norm_prov, na=False)].copy()
-        obras_asignadas_idx.update(gdf_obras_prov.index)
-
-        fg_prov = folium.FeatureGroup(name=f"Prov. {prov_nom}", overlay=True, show=True, control=False)
-
-        if not capa_prov.empty:
-            folium.GeoJson(
-                capa_prov,
-                interactive=False,
-                style_function=lambda x: {"color": "#475569", "fillOpacity": 0.02, "weight": 1.2, "dashArray": "4, 4"}
-            ).add_to(fg_prov)
-            pxmin, pymin, pxmax, pymax = capa_prov.total_bounds
-            p_bounds = [[pymin, pxmin], [pymax, pxmax]]
-        else:
-            p_bounds = region_dict_js[reg_key]["bounds"]
-
-        # Marcadores con el nuevo popup
-        for _, row in gdf_obras_prov.iterrows():
-            es_sup = "superficial" in str(row.get("Naturaleza", "")).lower()
-            folium.CircleMarker(
-                location=[row["latitud"], row["longitud"]],
-                radius=5,
-                color="#0056b3" if es_sup else "#212529",
-                fill=True,
-                fill_color="#007bff" if es_sup else "#6c757d",
-                fill_opacity=0.85,
-                weight=1.5,
-                tooltip=f"<b>{row.get('Codigo_Obra', '')}</b> - {row.get('Usuario', '')}",
-                popup=folium.Popup(crear_popup_obra(row), max_width=340)
-            ).add_to(fg_prov)
-
-        fg_prov.add_to(mapa_web)
-        prov_dict_js[prov_key] = {"name": prov_nom, "var": fg_prov.get_name(), "bounds": p_bounds}
-        region_dict_js[reg_key]["provinces"].append(prov_key)
-
-    # Obras huérfanas sin provincia asignada
-    obras_huerfanas = gdf_obras_reg[~gdf_obras_reg.index.isin(obras_asignadas_idx)]
-    if not obras_huerfanas.empty:
-        h_key = "sin_prov_" + reg_key
-        fg_huerfana = folium.FeatureGroup(name="Sin Provincia", overlay=True, show=True, control=False)
-        for _, row in obras_huerfanas.iterrows():
-            es_sup = "superficial" in str(row.get("Naturaleza", "")).lower()
-            folium.CircleMarker(
-                location=[row["latitud"], row["longitud"]],
-                radius=5,
-                color="#0056b3" if es_sup else "#212529",
-                fill=True,
-                fill_color="#007bff" if es_sup else "#6c757d",
-                fill_opacity=0.85,
-                weight=1.5,
-                tooltip=f"<b>{row.get('Codigo_Obra', '')}</b> - {row.get('Usuario', '')}",
-                popup=folium.Popup(crear_popup_obra(row), max_width=340)
-            ).add_to(fg_huerfana)
-        fg_huerfana.add_to(mapa_web)
-        prov_dict_js[h_key] = {"name": "Obras sin Provincia", "var": fg_huerfana.get_name(), "bounds": region_dict_js[reg_key]["bounds"]}
-        region_dict_js[reg_key]["provinces"].append(h_key)
-
-# Controles interactivos JavaScript
-menu_control_html = f"""
-<div style="position: fixed; top: 12px; left: 60px; z-index: 1000; background: white; padding: 10px 14px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.3); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; min-width: 240px;">
-    <label for="regionSelect" style="font-weight: bold; font-size: 13px; color: #333;">🗺️ Seleccionar Región:</label><br>
-    <select id="regionSelect" onchange="cambiarRegion(this.value)" style="margin-top: 6px; margin-bottom: 12px; padding: 6px; font-size: 12px; border-radius: 4px; border: 1px solid #ccc; width: 100%; cursor: pointer;">
-        <option value="">-- Todo el País --</option>
-        {options_html}
-    </select>
-    <br>
-    <label for="provinciaSelect" style="font-weight: bold; font-size: 13px; color: #333;">📍 Seleccionar Provincia:</label><br>
-    <select id="provinciaSelect" onchange="cambiarProvincia(this.value)" style="margin-top: 6px; padding: 6px; font-size: 12px; border-radius: 4px; border: 1px solid #ccc; width: 100%; cursor: pointer; background-color: #f8f9fa;" disabled>
-        <option value="">-- Todas las Provincias --</option>
-    </select>
-</div>
-
-<script>
-var regionDict = {json.dumps(region_dict_js)};
-var provDict = {json.dumps(prov_dict_js)};
-
-function mostrarTodo() {{
-    var map = {mapa_web.get_name()};
-    for (var r in regionDict) {{
-        var fgBorder = window[regionDict[r].border_var];
-        if (fgBorder && !map.hasLayer(fgBorder)) map.addLayer(fgBorder);
-        regionDict[r].provinces.forEach(function(pKey) {{
-            var fgProv = window[provDict[pKey].var];
-            if (fgProv && !map.hasLayer(fgProv)) map.addLayer(fgProv);
-        }});
-    }}
-}}
-
-function ocultarTodo() {{
-    var map = {mapa_web.get_name()};
-    for (var r in regionDict) {{
-        var fgBorder = window[regionDict[r].border_var];
-        if (fgBorder && map.hasLayer(fgBorder)) map.removeLayer(fgBorder);
-        regionDict[r].provinces.forEach(function(pKey) {{
-            var fgProv = window[provDict[pKey].var];
-            if (fgProv && map.hasLayer(fgProv)) map.removeLayer(fgProv);
-        }});
-    }}
-}}
-
-function cambiarRegion(regKey) {{
-    var map = {mapa_web.get_name()};
-    var provSelect = document.getElementById("provinciaSelect");
-    provSelect.innerHTML = '<option value="">-- Todas las Provincias --</option>';
-    ocultarTodo();
-
-    if (regKey === "") {{
-        provSelect.disabled = true;
-        provSelect.style.backgroundColor = "#f8f9fa";
-        mostrarTodo();
-        map.setView([-35.6751, -71.5430], 4);
-    }} else {{
-        provSelect.disabled = false;
-        provSelect.style.backgroundColor = "#ffffff";
-        var fgBorder = window[regionDict[regKey].border_var];
-        if (fgBorder && !map.hasLayer(fgBorder)) map.addLayer(fgBorder);
-
-        regionDict[regKey].provinces.forEach(function(pKey) {{
-            var pData = provDict[pKey];
-            var fgProv = window[pData.var];
-            if (fgProv && !map.hasLayer(fgProv)) map.addLayer(fgProv);
-            var opt = document.createElement("option");
-            opt.value = pKey;
-            opt.text = pData.name;
-            provSelect.add(opt);
-        }});
-        map.fitBounds(regionDict[regKey].bounds);
-    }}
-}}
-
-function cambiarProvincia(provKey) {{
-    var map = {mapa_web.get_name()};
-    var regKey = document.getElementById("regionSelect").value;
-    if (!regKey) return;
-    ocultarTodo();
-
-    var fgBorder = window[regionDict[regKey].border_var];
-    if (fgBorder && !map.hasLayer(fgBorder)) map.addLayer(fgBorder);
-
-    if (provKey === "") {{
-        regionDict[regKey].provinces.forEach(function(pKey) {{
-            var fgProv = window[provDict[pKey].var];
-            if (fgProv && !map.hasLayer(fgProv)) map.addLayer(fgProv);
-        }});
-        map.fitBounds(regionDict[regKey].bounds);
-    }} else {{
-        var fgProv = window[provDict[provKey].var];
-        if (fgProv && !map.hasLayer(fgProv)) map.addLayer(fgProv);
-        map.fitBounds(provDict[provKey].bounds);
-    }}
-}}
-</script>
-"""
-
-leyenda_html = """
-<div style="position: fixed; bottom: 30px; right: 10px; z-index: 1000; background-color: white; padding: 10px 14px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.3); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; font-size: 12px;">
-    <b style="font-size: 13px; color: #333;">Naturaleza de Obra</b>
-    <div style="display: flex; align-items: center; margin-top: 6px;">
-        <span style="height: 12px; width: 12px; background-color: #007bff; border: 1.5px solid #0056b3; border-radius: 50%; display: inline-block; margin-right: 8px;"></span>
-        <span>Superficial</span>
-    </div>
-    <div style="display: flex; align-items: center; margin-top: 4px;">
-        <span style="height: 12px; width: 12px; background-color: #6c757d; border: 1.5px solid #212529; border-radius: 50%; display: inline-block; margin-right: 8px;"></span>
-        <span>Subterránea</span>
-    </div>
-    <hr style="margin: 8px 0 6px 0; border: 0; border-top: 1px solid #eee;">
-    <div style="font-size: 11px; color: #666; font-weight: normal;">DGA - Monitoreo de Extracciones</div>
-</div>
-"""
-
-mapa_web.get_root().html.add_child(Element(menu_control_html))
-mapa_web.get_root().html.add_child(Element(leyenda_html))
-folium.LayerControl(collapsed=False).add_to(mapa_web)
-
-archivo_salida = "index.html"
-mapa_web.save(archivo_salida)
-print(f"\n🚀 ¡Éxito! Mapa nacional interactivo MEE generado en '{archivo_salida}'.")
+            style_function=lambda x: {"color": "black", "fillOpacity": 0, "weight": 2.2
