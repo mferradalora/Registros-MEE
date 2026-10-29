@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Visor de Mediciones MEE DGA</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #f8fafc; margin: 0; padding: 20px; color: #1e293b; }
+        .card { max-width: 1180px; margin: 0 auto; background: #ffffff; padding: 24px; border-radius: 10px; box-shadow: 0 4px 12px rgba(0,0,0,0.06); }
+        .header { display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 1px solid #e2e8f0; padding-bottom: 16px; margin-bottom: 16px; flex-wrap: wrap; gap: 12px; }
+        h1 { margin: 0; font-size: 20px; color: #0284c7; }
+        .subtitulo { font-size: 13px; color: #475569; margin-top: 4px; }
+        .btn { background: #0284c7; color: white; padding: 8px 16px; border-radius: 6px; text-decoration: none; font-size: 13px; font-weight: 600; border: none; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; }
+        .btn:hover { background: #0369a1; }
+        .btn:disabled { background: #94a3b8; cursor: not-allowed; }
+        #estado { font-size: 13px; color: #64748b; margin-bottom: 12px; font-weight: 500; }
+        .chart-box { position: relative; width: 100%; height: 500px; }
+        .spinner { display: inline-block; width: 14px; height: 14px; border: 2px solid #cbd5e1; border-top-color: #0284c7; border-radius: 50%; animation: spin 0.8s linear infinite; vertical-align: middle; margin-right: 6px; }
+        @keyframes spin { to { transform: rotate(360deg); } }
+    </style>
+</head>
+<body>
+
+<div class="card">
+    <div class="header">
+        <div>
+            <h1 id="titulo">Obra MEE: <span id="codText">{{CODIGO}}</span> - <span id="userText">{{USUARIO}}</span></h1>
+            <div class="subtitulo" id="metaText">Naturaleza: {{NATURALEZA}} | Comuna: {{COMUNA}}</div>
+            <div id="estado"><span class="spinner"></span> Consultando registros en servidor DGA MEE...</div>
+        </div>
+        <button id="btnCsv" class="btn" onclick="descargarCsv()" disabled>📥 Descargar CSV</button>
+    </div>
+
+    <div class="chart-box">
+        <canvas id="graficoCanvas"></canvas>
+    </div>
+</div>
+
+<script>
+    const urlParams = new URLSearchParams(window.location.search);
+    const codigo = urlParams.get('codigo') || "{{CODIGO}}";
+    let usuario = "{{USUARIO}}";
+    let datosCargados = [];
+    let chartInstance = null;
+
+    if (usuario === "{{" + "USUARIO" + "}}") usuario = "";
+
+    async function cargarInformacionYDatos() {
+        const estado = document.getElementById("estado");
+        const btnCsv = document.getElementById("btnCsv");
+
+        // 1. Obtener metadatos oficiales de la obra
+        try {
+            const resInfo = await fetch(`/api/info_obra?codigo=${encodeURIComponent(codigo)}`);
+            if (resInfo.ok) {
+                const info = await resInfo.json();
+                document.getElementById("codText").innerText = info.codigo_obra;
+                document.getElementById("userText").innerText = info.usuario;
+                document.getElementById("metaText").innerText = `Naturaleza: ${info.naturaleza} | Comuna: ${info.comuna} | Región: ${info.region} | Registro: ${info.fecha_registro}`;
+                usuario = info.usuario;
+            }
+        } catch (e) {}
+
+        // 2. Cargar mediciones
+        try {
+            const res = await fetch(`/api/datos?codigo=${encodeURIComponent(codigo)}`);
+            if (!res.ok) {
+                const err = await res.json();
+                throw new Error(err.detail || "No se encontraron mediciones para esta obra.");
+            }
+            datosCargados = await res.json();
+
+            estado.innerHTML = `✅ Mostrando <b>${datosCargados.length.toLocaleString()}</b> mediciones registradas.`;
+            btnCsv.disabled = false;
+            dibujarGrafico(datosCargados);
+        } catch (err) {
+            estado.innerHTML = `⚠️ ${err.message}`;
+        }
+    }
+
+    function dibujarGrafico(datos) {
+        const labels = datos.map(d => d.fecha_str.split(" ")[0]); // DD-MM-YYYY
+        const caudales = datos.map(d => d.caudal_ls !== null ? d.caudal_ls : null);
+        const niveles = datos.map(d => d.nivel_m !== null ? d.nivel_m : null);
+
+        const datasets = [];
+
+        // Caudal (l/s)
+        if (caudales.some(v => v !== null)) {
+            datasets.push({
+                label: 'Caudal Medido (l/s)',
+                data: caudales,
+                borderColor: '#0284c7',
+                backgroundColor: '#0284c7',
+                yAxisID: 'yCaudal',
+                borderWidth: 2,
+                pointRadius: 0,
+                pointHoverRadius: 4,
+                spanGaps: true
+            });
+        }
+
+        // Nivel Freático (m)
+        if (niveles.some(v => v !== null)) {
+            datasets.push({
+                label: 'Nivel Freático (m)',
+                data: niveles,
+                borderColor: '#d97706',
+                backgroundColor: '#d97706',
+                yAxisID: 'yNivel',
+                borderWidth: 2,
+                pointRadius: 0,
+                pointHoverRadius: 4,
+                spanGaps: true
+            });
+        }
+
+        const ctx = document.getElementById('graficoCanvas').getContext('2d');
+        if (chartInstance) chartInstance.destroy();
+
+        chartInstance = new Chart(ctx, {
+            type: 'line',
+            data: { labels, datasets },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                interaction: { mode: 'index', intersect: false },
+                scales: {
+                    x: {
+                        ticks: {
+                            maxTicksLimit: 12,
+                            callback: function(val, index) { return labels[index] || ""; }
+                        },
+                        grid: { display: false }
+                    },
+                    yCaudal: {
+                        type: 'linear',
+                        position: 'left',
+                        title: { display: true, text: 'Caudal (l/s)', color: '#0284c7' },
+                        grid: { color: "#f1f5f9" }
+                    },
+                    yNivel: {
+                        type: 'linear',
+                        position: 'right',
+                        title: { display: true, text: 'Nivel (m)', color: '#d97706' },
+                        grid: { display: false }
+                    }
+                }
+            }
+        });
+    }
+
+    function descargarCsv() {
+        if (!datosCargados || datosCargados.length === 0) {
+            window.location.href = `/api/descargar_csv?codigo=${encodeURIComponent(codigo)}`;
+            return;
+        }
+
+        let csv = "codigo_obra,usuario,fecha_hora,caudal_ls,totalizador_m3,nivel_m\n";
+        datosCargados.forEach(d => {
+            const nomLimpio = (d.usuario || usuario || "").replace(/"/g, '""');
+            csv += `"${d.codigo_obra}","${nomLimpio}","${d.fecha_str}",${d.caudal_ls !== null ? d.caudal_ls : ""},${d.totalizador_m3 !== null ? d.totalizador_m3 : ""},${d.nivel_m !== null ? d.nivel_m : ""}\n`;
+        });
+
+        const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = `MEE_${codigo}.csv`;
+        a.click();
+        URL.revokeObjectURL(url);
+    }
+
+    window.onload = cargarInformacionYDatos;
+</script>
+</body>
+</html>
