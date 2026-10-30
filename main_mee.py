@@ -18,7 +18,7 @@ df_cat = pd.DataFrame()
 
 for ruta in POSIBLES_RUTAS:
     if os.path.exists(ruta):
-        df_cat = pd.read_csv(ruta)
+        df_cat = pd.read_csv(ruta, low_memory=False)
         df_cat["Codigo_Obra"] = df_cat["Codigo_Obra"].fillna("").astype(str).str.strip()
         df_cat["ID_Obra"] = pd.to_numeric(df_cat["ID_Obra"], errors="coerce").fillna(0).astype(int)
         if "Fecha_Registro_DGA" in df_cat.columns:
@@ -90,7 +90,12 @@ def api_datos(codigo: str = Query(...)):
 
     df_res["usuario"] = info["usuario"]
     df_res["fecha_str"] = df_res["fecha_hora"].dt.strftime("%d-%m-%Y %H:%M")
-    return df_res[["codigo_obra", "usuario", "fecha_str", "caudal_ls", "totalizador_m3", "nivel_m"]].to_dict(orient="records")
+
+    # Serialización directa a JSON con manejo automático de NaN -> null
+    cols_salida = ["codigo_obra", "usuario", "fecha_str", "caudal_ls", "totalizador_m3", "nivel_m"]
+    json_bytes = df_res[cols_salida].to_json(orient="records")
+
+    return Response(content=json_bytes, media_type="application/json")
 
 
 @app.get("/api/descargar_csv")
@@ -109,7 +114,9 @@ def descargar_csv(codigo: str = Query(...)):
         raise HTTPException(status_code=404, detail="Sin datos disponibles para exportar.")
 
     df_res["usuario"] = info["usuario"]
-    csv_bytes = df_res[["codigo_obra", "usuario", "fecha_hora", "caudal_ls", "totalizador_m3", "nivel_m"]].to_csv(index=False, encoding="utf-8-sig")
+    df_res["fecha_str"] = df_res["fecha_hora"].dt.strftime("%d-%m-%Y %H:%M")
+    df_salida = df_res[["codigo_obra", "usuario", "fecha_str", "caudal_ls", "totalizador_m3", "nivel_m"]]
+    csv_bytes = df_salida.to_csv(index=False, encoding="utf-8-sig")
 
     return Response(
         content=csv_bytes,
