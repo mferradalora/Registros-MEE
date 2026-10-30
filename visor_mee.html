@@ -50,7 +50,7 @@
         const estado = document.getElementById("estado");
         const btnCsv = document.getElementById("btnCsv");
 
-        // 1. Obtener metadatos oficiales de la obra
+        // 1. Metadatos oficiales
         try {
             const resInfo = await fetch(`/api/info_obra?codigo=${encodeURIComponent(codigo)}`);
             if (resInfo.ok) {
@@ -62,12 +62,21 @@
             }
         } catch (e) {}
 
-        // 2. Cargar mediciones
+        // 2. Consulta de mediciones
         try {
             const res = await fetch(`/api/datos?codigo=${encodeURIComponent(codigo)}`);
             if (!res.ok) {
-                const err = await res.json();
-                throw new Error(err.detail || "No se encontraron mediciones para esta obra.");
+                let errDetalle = `Error HTTP ${res.status}`;
+                try {
+                    const errJson = await res.json();
+                    errDetalle = errJson.detail || errJson.message || errDetalle;
+                } catch (_) {
+                    try {
+                        const txt = await res.text();
+                        if (txt) errDetalle = txt;
+                    } catch (_) {}
+                }
+                throw new Error(errDetalle);
             }
             datosCargados = await res.json();
 
@@ -80,13 +89,12 @@
     }
 
     function dibujarGrafico(datos) {
-        const labels = datos.map(d => d.fecha_str.split(" ")[0]); // DD-MM-YYYY
-        const caudales = datos.map(d => d.caudal_ls !== null ? d.caudal_ls : null);
-        const niveles = datos.map(d => d.nivel_m !== null ? d.nivel_m : null);
+        const labels = datos.map(d => d.fecha_str);
+        const caudales = datos.map(d => (d.caudal_ls !== null && !isNaN(d.caudal_ls)) ? d.caudal_ls : null);
+        const niveles = datos.map(d => (d.nivel_m !== null && !isNaN(d.nivel_m)) ? d.nivel_m : null);
 
         const datasets = [];
 
-        // Caudal (l/s)
         if (caudales.some(v => v !== null)) {
             datasets.push({
                 label: 'Caudal Medido (l/s)',
@@ -94,14 +102,13 @@
                 borderColor: '#0284c7',
                 backgroundColor: '#0284c7',
                 yAxisID: 'yCaudal',
-                borderWidth: 2,
+                borderWidth: 1.8,
                 pointRadius: 0,
                 pointHoverRadius: 4,
                 spanGaps: true
             });
         }
 
-        // Nivel Freático (m)
         if (niveles.some(v => v !== null)) {
             datasets.push({
                 label: 'Nivel Freático (m)',
@@ -109,7 +116,7 @@
                 borderColor: '#d97706',
                 backgroundColor: '#d97706',
                 yAxisID: 'yNivel',
-                borderWidth: 2,
+                borderWidth: 1.8,
                 pointRadius: 0,
                 pointHoverRadius: 4,
                 spanGaps: true
@@ -130,7 +137,10 @@
                     x: {
                         ticks: {
                             maxTicksLimit: 12,
-                            callback: function(val, index) { return labels[index] || ""; }
+                            callback: function(val, index) {
+                                const l = labels[index];
+                                return l ? l.split(" ")[0] : "";
+                            }
                         },
                         grid: { display: false }
                     },
@@ -143,7 +153,7 @@
                     yNivel: {
                         type: 'linear',
                         position: 'right',
-                        title: { display: true, text: 'Nivel (m)', color: '#d97706' },
+                        title: { display: true, text: 'Nivel Freático (m)', color: '#d97706' },
                         grid: { display: false }
                     }
                 }
@@ -160,7 +170,10 @@
         let csv = "codigo_obra,usuario,fecha_hora,caudal_ls,totalizador_m3,nivel_m\n";
         datosCargados.forEach(d => {
             const nomLimpio = (d.usuario || usuario || "").replace(/"/g, '""');
-            csv += `"${d.codigo_obra}","${nomLimpio}","${d.fecha_str}",${d.caudal_ls !== null ? d.caudal_ls : ""},${d.totalizador_m3 !== null ? d.totalizador_m3 : ""},${d.nivel_m !== null ? d.nivel_m : ""}\n`;
+            const c = (d.caudal_ls !== null && d.caudal_ls !== undefined) ? d.caudal_ls : "";
+            const t = (d.totalizador_m3 !== null && d.totalizador_m3 !== undefined) ? d.totalizador_m3 : "";
+            const n = (d.nivel_m !== null && d.nivel_m !== undefined) ? d.nivel_m : "";
+            csv += `"${d.codigo_obra}","${nomLimpio}","${d.fecha_str}",${c},${t},${n}\n`;
         });
 
         const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
