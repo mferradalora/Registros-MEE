@@ -32,26 +32,32 @@ app = FastAPI(
 # Patrón de validación oficial DGA: 'OB-XXXX-XXX' (obras) o 'OR-XXXX-XXX' (restituciones)
 PATRON_CODIGO_OBRA = re.compile(r'^(OB|OR)-\d{3,5}-\d{1,5}$')
 
-POSIBLES_RUTAS = ["catalogo_obras_mee.csv", "Listado_Obras_MEE.csv", "data/catalogo_obras_mee.csv"]
+RUTA_CATALOGO = "data/catalogo_obras_mee.csv"
 cat_dict = {}
 
-for ruta in POSIBLES_RUTAS:
-    if os.path.exists(ruta):
-        df_cat = pd.read_csv(ruta, low_memory=False)
-        df_cat["Codigo_Obra_Upper"] = df_cat["Codigo_Obra"].fillna("").astype(str).str.strip().str.upper()
-        df_cat["ID_Obra"] = pd.to_numeric(df_cat["ID_Obra"], errors="coerce").fillna(0).astype(int)
+if os.path.exists(RUTA_CATALOGO):
+    df_cat = pd.read_csv(RUTA_CATALOGO, low_memory=False)
+    df_cat["Codigo_Obra_Upper"] = df_cat["Codigo_Obra"].fillna("").astype(str).str.strip().str.upper()
+    df_cat["ID_Obra"] = pd.to_numeric(df_cat["ID_Obra"], errors="coerce").fillna(0).astype(int)
 
-        if "Fecha_Registro_DGA" in df_cat.columns:
-            df_cat["Fecha_Clean"] = pd.to_datetime(df_cat["Fecha_Registro_DGA"], dayfirst=True, errors="coerce").dt.date
-        else:
-            df_cat["Fecha_Clean"] = datetime.date(2020, 1, 1)
-        df_cat["Fecha_Clean"] = df_cat["Fecha_Clean"].fillna(datetime.date(2020, 1, 1))
+    if "Fecha_Registro_DGA" in df_cat.columns:
+        df_cat["Fecha_Clean"] = pd.to_datetime(
+            df_cat["Fecha_Registro_DGA"], dayfirst=True, errors="coerce"
+        ).dt.date
+    else:
+        df_cat["Fecha_Clean"] = datetime.date(2020, 1, 1)
 
-        # Cargar a diccionario nativo para búsquedas O(1) instantáneas
-        cat_dict = df_cat.drop_duplicates(subset=["Codigo_Obra_Upper"]).set_index("Codigo_Obra_Upper").to_dict(orient="index")
-        print(f"✅ Catálogo MEE indexado en memoria: {len(cat_dict):,} obras desde '{ruta}'.", flush=True)
-        break
+    df_cat["Fecha_Clean"] = df_cat["Fecha_Clean"].fillna(datetime.date(2020, 1, 1))
 
+    # Indexación a diccionario nativo para búsquedas O(1)
+    cat_dict = (
+        df_cat.drop_duplicates(subset=["Codigo_Obra_Upper"])
+        .set_index("Codigo_Obra_Upper")
+        .to_dict(orient="index")
+    )
+    print(f"✅ Catálogo MEE indexado en memoria: {len(cat_dict):,} obras desde '{RUTA_CATALOGO}'.", flush=True)
+else:
+    print(f"⚠️ Alerta: No se encontró el archivo en '{RUTA_CATALOGO}'. Verifica el directorio de ejecución.", flush=True)
 
 def validar_codigo(codigo: str) -> str:
     """Valida y normaliza el identificador de la obra antes de cualquier consulta."""
