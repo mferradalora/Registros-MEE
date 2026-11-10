@@ -27,16 +27,19 @@ HEADERS_BASE = {
     'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36'
 }
 
-
+_token_cache = {"token": None, "expira": datetime.datetime.min}
 def obtener_token_dga():
-    """Genera token JWT Bearer en el servicio REST de la DGA."""
-    print("🔑 Solicitando token de autorización a DGA SNIA...", flush=True)
+    ahora = datetime.datetime.now()
+    if _token_cache["token"] and ahora < _token_cache["expira"]:
+        return _token_cache["token"]
+        
     resp = requests.post(URL_AUTH, json=AUTH_PAYLOAD, headers=HEADERS_BASE, timeout=15)
     resp.raise_for_status()
     token = resp.json().get("accessToken")
-    print("🔑 Token DGA adquirido exitosamente.", flush=True)
+    
+    _token_cache["token"] = token
+    _token_cache["expira"] = ahora + datetime.timedelta(minutes=15)
     return token
-
 
 def descargar_reporte_crudo(codigo_obra: str, id_obra: int, fecha_desde_dt: datetime.date):
     """Solicita el reporte de mediciones detallado a la DGA."""
