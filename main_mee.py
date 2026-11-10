@@ -13,21 +13,19 @@ inicializar_db()
 app = FastAPI(title="Servicio de Registros MEE DGA")
 
 # Cargar catálogo de obras en memoria
-POSIBLES_RUTAS = ["catalogo_obras_mee.csv", "Listado_Obras_MEE.csv", "data/catalogo_obras_mee.csv"]
+ruta = "data/catalogo_obras_mee.csv"
 df_cat = pd.DataFrame()
 
-for ruta in POSIBLES_RUTAS:
-    if os.path.exists(ruta):
-        df_cat = pd.read_csv(ruta, low_memory=False)
-        df_cat["Codigo_Obra"] = df_cat["Codigo_Obra"].fillna("").astype(str).str.strip()
-        df_cat["ID_Obra"] = pd.to_numeric(df_cat["ID_Obra"], errors="coerce").fillna(0).astype(int)
-        if "Fecha_Registro_DGA" in df_cat.columns:
-            df_cat["Fecha_Clean"] = pd.to_datetime(df_cat["Fecha_Registro_DGA"], dayfirst=True, errors="coerce").dt.date
-        else:
-            df_cat["Fecha_Clean"] = datetime.date(2020, 1, 1)
-        df_cat["Fecha_Clean"] = df_cat["Fecha_Clean"].fillna(datetime.date(2020, 1, 1))
-        print(f"✅ Catálogo MEE cargado exitosamente desde '{ruta}' ({len(df_cat):,} obras).", flush=True)
-        break
+df_cat = pd.read_csv(ruta, low_memory=False)
+df_cat["Codigo_Obra"] = df_cat["Codigo_Obra"].fillna("").astype(str).str.strip()
+df_cat["ID_Obra"] = pd.to_numeric(df_cat["ID_Obra"], errors="coerce").fillna(0).astype(int)
+if "Fecha_Registro_DGA" in df_cat.columns:
+    df_cat["Fecha_Clean"] = pd.to_datetime(df_cat["Fecha_Registro_DGA"], dayfirst=True, errors="coerce").dt.date
+else:
+    df_cat["Fecha_Clean"] = datetime.date(2020, 1, 1)
+df_cat["Fecha_Clean"] = df_cat["Fecha_Clean"].fillna(datetime.date(2020, 1, 1))
+print(f"✅ Catálogo MEE cargado exitosamente desde '{ruta}' ({len(df_cat):,} obras).", flush=True)
+break
 
 
 def obtener_info_obra(codigo_obra: str) -> dict:
