@@ -33,7 +33,7 @@ def obtener_token_dga():
     if _token_cache["token"] and ahora < _token_cache["expira"]:
         return _token_cache["token"]
         
-    resp = requests.post(URL_AUTH, json=AUTH_PAYLOAD, headers=HEADERS_BASE, timeout=15)
+    resp = requests.post(URL_AUTH, json=AUTH_PAYLOAD, headers=HEADERS_BASE, timeout=(30, 60))
     resp.raise_for_status()
     token = resp.json().get("accessToken")
     
@@ -74,13 +74,13 @@ def descargar_reporte_crudo(codigo_obra: str, id_obra: int, fecha_desde_dt: date
     }
 
     print(f"📡 Enviando solicitud a DGA para obra {codigo_obra} (ID: {id_obra}, Desde: {fecha_desde_dt})...", flush=True)
-    resp = session.post(URL_REPORTE, headers=headers, json=payload, timeout=90)
+    resp = session.post(URL_REPORTE, headers=headers, json=payload, timeout=(30, 120))
     
     if resp.status_code == 401:
         print("🔄 Token expirado, renovando...", flush=True)
         token = obtener_token_dga()
         headers['authorization'] = f'Bearer {token}'
-        resp = session.post(URL_REPORTE, headers=headers, json=payload, timeout=90)
+        resp = session.post(URL_REPORTE, headers=headers, json=payload, timeout=(30, 120))
 
     print(f"📦 Respuesta DGA recibida (Código HTTP: {resp.status_code}, Tamaño: {len(resp.content):,} bytes).", flush=True)
     resp.raise_for_status()
