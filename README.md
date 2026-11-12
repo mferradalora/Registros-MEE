@@ -1,7 +1,7 @@
 # 💧 Registros-MEE: Monitoreo de Extracciones Efectivas DGA Chile
 
-Plataforma integral de cartografía interactiva, almacenamiento en base de datos local, visualización y descarga de series de tiempo de las obras registrada en el software de **Monitoreo de Extracciones Efectivas (MEE)** de la **Dirección General de Aguas (DGA)** del Ministerio de Obras Públicas de Chile. La información es consultada y extraída directamente desde el 
-**Módulo de Consulta Publica de Extracciones [https://snia.mop.gob.cl/cExtracciones2/#/busquedaPublica](https://snia.mop.gob.cl/cExtracciones2/#/busquedaPublica)** de la DGA.
+Plataforma implementada en integral de cartografía interactiva, almacenamiento en base de datos local, visualización y descarga de series de tiempo de las obras registrada en el software de **Monitoreo de Extracciones Efectivas (MEE)** de la **Dirección General de Aguas (DGA)** del Ministerio de Obras Públicas de Chile. La información es consultada y extraída directamente desde el 
+**[Módulo de Consulta Publica de Extracciones](https://snia.mop.gob.cl/cExtracciones2/#/busquedaPublica)** de la DGA.
 
 ---
 
