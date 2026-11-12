@@ -138,29 +138,7 @@ def api_datos(codigo: str = Query(...)):
 
     cols_salida = ["codigo_obra", "usuario", "fecha_str", "caudal_ls", "totalizador_m3", "nivel_m"]
     json_bytes = df_res[cols_salida].to_json(orient="records")
-    
-    # En main_mee.py (dentro de api_datos)
-    if verificar_necesidad_scraping(cod):
-        fecha_inicio_consulta = obtener_fecha_inicio_incremental(cod, info["fecha_registro"])
-        print(f"📡 Sincronizando {cod} desde {fecha_inicio_consulta}...", flush=True)
-        try:
-            obtener_mediciones_obra(
-                cod,
-                info["id_obra"],
-                fecha_inicio_consulta,
-                callback_guardado=guardar_mediciones  # Persiste cada semestre inmediatamente en SQLite
-            )
-            registrar_intento_scraping(cod)
-        except Exception as e:
-            print(f"❌ Fallo de comunicación con DGA SNIA para {cod}: {e}", flush=True)
-            # Si ya había datos previos en caché, no bloqueamos al usuario con error 502;
-            # retornamos lo almacenado localmente y permitimos reintentar en la próxima consulta.
-            if consultar_datos_locales(cod).empty:
-                raise HTTPException(
-                    status_code=502,
-                    detail=f"Timeout o error en servidor DGA SNIA: {str(e)}"
-                )
-                
+
     return Response(content=json_bytes, media_type="application/json")
 
 

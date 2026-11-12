@@ -2,17 +2,12 @@
 # -*- coding: utf-8 -*-
 """
 Módulo de extracción y normalización de series temporales MEE (DGA SNIA).
-Compatible con calamine, xlrd, openpyxl y HTML tables.
-Reutiliza sesión HTTP y token JWT a lo largo de ventanas de 180 días para evitar timeouts.
+Compatible con calamine, xlrd y HTML tables.
 """
 
-import os
 import io
-import time
 import datetime
 import requests
-from requests.adapters import HTTPAdapter
-from urllib3.util.retry import Retry
 import pandas as pd
 
 URL_AUTH = "https://snia.mop.gob.cl/mee-auth-rest/v1/authorization"
@@ -33,62 +28,26 @@ HEADERS_BASE = {
 }
 
 _token_cache = {"token": None, "expira": datetime.datetime.min}
-
-
-def crear_sesion_resiliente() -> requests.Session:
-    """Crea una sesión HTTP reutilizable con reintentos automáticos ante cortes transitorios."""
-    session = requests.Session()
-    retry = Retry(
-        total=2,
-        backoff_factor=1.5,
-        status_forcelist=[429, 500, 502, 503, 504],
-        allowed_methods=["POST"]
-    )
-    adapter = HTTPAdapter(max_retries=retry)
-    session.mount("https://", adapter)
-    return session
-
-
-def obtener_token_dga(session: requests.Session, forzar_renovacion: bool = False) -> str:
-    """Genera o reutiliza desde caché el token JWT Bearer en el servicio REST de la DGA."""
+def obtener_token_dga():
     ahora = datetime.datetime.now()
-    if not forzar_renovacion and _token_cache["token"] and ahora < _token_cache["expira"]:
+    if _token_cache["token"] and ahora < _token_cache["expira"]:
         return _token_cache["token"]
-
-    if not AUTH_PAYLOAD['apiKey']:
-        raise RuntimeError("Variable de entorno DGA_API_KEY no configurada.")
-
-    print("🔑 Solicitando token de autorización a DGA SNIA...", flush=True)
-    resp = session.post(URL_AUTH, json=AUTH_PAYLOAD, headers=HEADERS_BASE, timeout=(15, 30))
+        
+    resp = requests.post(URL_AUTH, json=AUTH_PAYLOAD, headers=HEADERS_BASE, timeout=15)
     resp.raise_for_status()
     token = resp.json().get("accessToken")
-
+    
     _token_cache["token"] = token
     _token_cache["expira"] = ahora + datetime.timedelta(minutes=15)
-    print("🔑 Token DGA adquirido y almacenado en caché (15 min).", flush=True)
     return token
 
+def descargar_reporte_crudo(codigo_obra: str, id_obra: int, fecha_desde_dt: datetime.date):
+    """Solicita el reporte de mediciones detallado a la DGA."""
+    token = obtener_token_dga()
+    session = requests.Session()
 
-def generar_ventanas(fecha_inicio: datetime.date, fecha_fin: datetime.date, dias_bloque: int = 180):
-    """Divide un rango histórico de fechas en sub-intervalos de 180 días."""
-    actual = fecha_inicio
-    while actual <= fecha_fin:
-        siguiente = min(actual + datetime.timedelta(days=dias_bloque - 1), fecha_fin)
-        yield actual, siguiente
-        actual = siguiente + datetime.timedelta(days=1)
-
-
-def descargar_tramo_crudo(
-    session: requests.Session,
-    token: str,
-    codigo_obra: str,
-    id_obra: int,
-    fecha_desde_dt: datetime.date,
-    fecha_hasta_dt: datetime.date
-):
-    """Solicita un tramo temporal acotado al endpoint obrasDetallado usando la sesión y token activos."""
     fecha_desde_iso = f"{fecha_desde_dt.strftime('%Y-%m-%d')}T03:00:00.000Z"
-    fecha_hasta_iso = f"{(fecha_hasta_dt + datetime.timedelta(days=1)).strftime('%Y-%m-%d')}T02:59:59.000Z"
+    fecha_hasta_iso = f"{datetime.date.today().strftime('%Y-%m-%d')}T02:59:59.000Z"
     es_restitucion = str(codigo_obra).strip().upper().startswith("OR")
 
     headers = dict(HEADERS_BASE)
@@ -114,18 +73,18 @@ def descargar_tramo_crudo(
         },
     }
 
-    print(f"📡 Enviando solicitud a DGA para {codigo_obra} (ID: {id_obra}) [{fecha_desde_dt} -> {fecha_hasta_dt}]...", flush=True)
-    resp = session.post(URL_REPORTE, headers=headers, json=payload, timeout=(15, 60))
-
+    print(f"📡 Enviando solicitud a DGA para obra {codigo_obra} (ID: {id_obra}, Desde: {fecha_desde_dt})...", flush=True)
+    resp = session.post(URL_REPORTE, headers=headers, json=payload, timeout=90)
+    
     if resp.status_code == 401:
-        print("🔄 Token expirado en SNIA, forzando renovación...", flush=True)
-        token = obtener_token_dga(session, forzar_renovacion=True)
+        print("🔄 Token expirado, renovando...", flush=True)
+        token = obtener_token_dga()
         headers['authorization'] = f'Bearer {token}'
-        resp = session.post(URL_REPORTE, headers=headers, json=payload, timeout=(15, 60))
+        resp = session.post(URL_REPORTE, headers=headers, json=payload, timeout=90)
 
-    print(f"📦 Respuesta DGA recibida (HTTP: {resp.status_code}, Tamaño: {len(resp.content):,} bytes).", flush=True)
+    print(f"📦 Respuesta DGA recibida (Código HTTP: {resp.status_code}, Tamaño: {len(resp.content):,} bytes).", flush=True)
     resp.raise_for_status()
-    return resp.content, token
+    return resp.content
 
 
 def combinar_fecha_hora(f_val, h_val):
@@ -135,7 +94,7 @@ def combinar_fecha_hora(f_val, h_val):
         f_str = f_val.strftime("%d/%m/%Y")
     else:
         f_str = str(f_val).strip().split(' ')[0]
-
+        
     if pd.isna(h_val):
         h_str = "00:00"
     elif isinstance(h_val, (datetime.time, pd.Timestamp)):
@@ -145,7 +104,7 @@ def combinar_fecha_hora(f_val, h_val):
         partes = h_str.split(':')
         if len(partes) > 2:
             h_str = f"{partes[0]}:{partes[1]}"
-
+            
     return f"{f_str} {h_str}"
 
 
@@ -156,6 +115,7 @@ def parsear_reporte_mee(content_bytes: bytes, codigo_obra: str) -> pd.DataFrame:
 
     df_raw = None
 
+    # Intentos de lectura en cascada
     # 1. Intentar con engine='calamine' (ultrarrápido para .xls y .xlsx)
     try:
         df_raw = pd.read_excel(io.BytesIO(content_bytes), engine="calamine", header=None)
@@ -260,48 +220,14 @@ def parsear_reporte_mee(content_bytes: bytes, codigo_obra: str) -> pd.DataFrame:
 
     df["codigo_obra"] = codigo_obra
     df = df.sort_values(by="fecha_hora").reset_index(drop=True)
-    print(f"✅ Se procesaron exitosamente {len(df):,} filas en el tramo.", flush=True)
+    print(f"✅ Se procesaron exitosamente {len(df):,} filas de mediciones.", flush=True)
     return df[["codigo_obra", "fecha_hora", "caudal_ls", "totalizador_m3", "nivel_m"]]
 
 
-def obtener_mediciones_obra(
-    codigo_obra: str,
-    id_obra: int,
-    fecha_desde_dt: datetime.date,
-    callback_guardado=None
-) -> pd.DataFrame:
-    """
-    Extrae las mediciones en bloques de 180 días reutilizando sesión HTTP y token JWT.
-    Si se entrega callback_guardado(df_tramo), persiste cada tramo en SQLite apenas se descarga.
-    """
-    session = crear_sesion_resiliente()
-    token = obtener_token_dga(session)
-    hoy = datetime.date.today()
-
-    if fecha_desde_dt > hoy:
-        fecha_desde_dt = hoy - datetime.timedelta(days=7)
-
-    dfs_tramos = []
-    for f_ini, f_fin in generar_ventanas(fecha_desde_dt, hoy, dias_bloque=180):
-        raw_bytes, token = descargar_tramo_crudo(session, token, codigo_obra, id_obra, f_ini, f_fin)
-        df_tramo = parsear_reporte_mee(raw_bytes, codigo_obra)
-
-        if not df_tramo.empty:
-            if callback_guardado is not None:
-                callback_guardado(df_tramo)
-            dfs_tramos.append(df_tramo)
-
-        # Pausa breve entre ventanas para no saturar el balanceador del MOP
-        time.sleep(0.4)
-
-    if not dfs_tramos:
+def obtener_mediciones_obra(codigo_obra: str, id_obra: int, fecha_desde_dt: datetime.date) -> pd.DataFrame:
+    try:
+        raw_bytes = descargar_reporte_crudo(codigo_obra, id_obra, fecha_desde_dt)
+        return parsear_reporte_mee(raw_bytes, codigo_obra)
+    except Exception as e:
+        print(f"❌ Error en el proceso de extracción para {codigo_obra}: {e}", flush=True)
         return pd.DataFrame()
-
-    df_total = pd.concat(dfs_tramos, ignore_index=True)
-    df_total = (
-        df_total.drop_duplicates(subset=["codigo_obra", "fecha_hora"])
-        .sort_values("fecha_hora")
-        .reset_index(drop=True)
-    )
-    print(f"🏁 Extracción completa para {codigo_obra}: {len(df_total):,} registros consolidados.", flush=True)
-    return df_total

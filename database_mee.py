@@ -184,23 +184,3 @@ def consultar_extracciones_mensuales(codigo_obra: str) -> pd.DataFrame:
     resumen["mes"] = resumen.index.month
 
     return resumen.reset_index(drop=True)
-
-# En database_mee.py
-def obtener_fecha_inicio_incremental(codigo_obra: str, fecha_registro_default: datetime.date) -> datetime.date:
-    """
-    Si la obra ya tiene datos en caché, retorna (última_fecha - 3 días) para actualizar
-    solo el delta reciente y absorber eventuales paquetes telemétricos rezagados.
-    """
-    with get_db() as conn:
-        cur = conn.execute("""
-            SELECT MAX(fecha_hora) as ult_medicion
-            FROM mediciones_mee
-            WHERE codigo_obra = ?;
-        """, [codigo_obra.strip().upper()])
-        row = cur.fetchone()
-
-        if row and row["ult_medicion"]:
-            ult_dt = datetime.strptime(row["ult_medicion"], "%Y-%m-%d %H:%M:%S")
-            return (ult_dt - timedelta(days=3)).date()
-
-    return fecha_registro_default
